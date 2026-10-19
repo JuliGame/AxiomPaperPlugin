@@ -6,6 +6,9 @@ import com.moulberry.axiom.event.AxiomAfterManipulateEntityEvent;
 import com.moulberry.axiom.event.AxiomManipulateEntityEvent;
 import com.moulberry.axiom.integration.Integration;
 import com.moulberry.axiom.packet.PacketHandler;
+import com.moulberry.axiom.nbt.AxiomNbtBridge;
+import com.moulberry.axiom.paperapi.entity.AxiomVirtualEntityMutation;
+import com.moulberry.axiom.paperapi.entity.AxiomVirtualEntityApi;
 import com.moulberry.axiom.restrictions.AxiomPermission;
 import com.moulberry.axiom.viaversion.UnknownVersionHelper;
 import net.minecraft.core.BlockPos;
@@ -25,6 +28,7 @@ import net.minecraft.world.level.storage.TagValueInput;
 import net.minecraft.world.level.storage.TagValueOutput;
 import net.minecraft.world.phys.Vec3;
 import org.bukkit.Location;
+import org.bukkit.Bukkit;
 import org.bukkit.craftbukkit.CraftWorld;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.Nullable;
@@ -33,6 +37,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.EnumSet;
 
 public class ManipulateEntityPacketListener implements PacketHandler {
 
@@ -97,7 +102,11 @@ public class ManipulateEntityPacketListener implements PacketHandler {
 
         for (ManipulateEntry entry : entries) {
             Entity entity = serverLevel.getEntity(entry.uuid);
-            if (entity == null || entity instanceof net.minecraft.world.entity.player.Player || entity.hasPassenger(ManipulateEntityPacketListener::isPlayer)) continue;
+            if (entity == null) {
+                applyVirtualMutation(player, entry);
+                continue;
+            }
+            if (entity instanceof net.minecraft.world.entity.player.Player || entity.hasPassenger(ManipulateEntityPacketListener::isPlayer)) continue;
 
             if (!this.plugin.canEntityBeManipulated(entity.getType())) {
                 continue;
@@ -223,6 +232,62 @@ public class ManipulateEntityPacketListener implements PacketHandler {
             AxiomAfterManipulateEntityEvent afterManipulateEvent = new AxiomAfterManipulateEntityEvent(player, entity.getBukkitEntity());
             afterManipulateEvent.callEvent();
         }
+    }
+
+    private void applyVirtualMutation(Player player, ManipulateEntry entry) {
+        var virtual = AxiomVirtualEntityApi.find(player.getUniqueId(), entry.uuid);
+        if (virtual == null) {
+            return;
+        }
+        var snapshot = virtual.snapshot();
+        Location current = new Location(
+                Bukkit.getWorld(snapshot.worldUuid()),
+                snapshot.x(), snapshot.y(), snapshot.z(),
+                snapshot.yaw(), snapshot.pitch());
+        if (current.getWorld() == null
+                || !current.getWorld().equals(player.getWorld())
+                || !Integration.canPlaceBlock(player, current)
+                || entry.passengerManipulation != PassengerManipulation.NONE
+                || !entry.passengers.isEmpty()) {
+            return;
+        }
+
+        AxiomVirtualEntityMutation.Position position = null;
+        if (entry.position != null && entry.relativeMovementSet != null) {
+            double targetX = entry.relativeMovementSet.contains(Relative.X)
+                    ? current.getX() + entry.position.x : entry.position.x;
+            double targetY = entry.relativeMovementSet.contains(Relative.Y)
+                    ? current.getY() + entry.position.y : entry.position.y;
+            double targetZ = entry.relativeMovementSet.contains(Relative.Z)
+                    ? current.getZ() + entry.position.z : entry.position.z;
+            float targetYaw = entry.relativeMovementSet.contains(Relative.Y_ROT)
+                    ? current.getYaw() + entry.yaw : entry.yaw;
+            float targetPitch = entry.relativeMovementSet.contains(Relative.X_ROT)
+                    ? current.getPitch() + entry.pitch : entry.pitch;
+            if (!Double.isFinite(targetX) || !Double.isFinite(targetY) || !Double.isFinite(targetZ)
+                    || !Float.isFinite(targetYaw) || !Float.isFinite(targetPitch)
+                    || !Integration.canPlaceBlock(player,
+                    new Location(current.getWorld(), targetX, targetY, targetZ))) {
+                return;
+            }
+            EnumSet<AxiomVirtualEntityMutation.Relative> relative =
+                    EnumSet.noneOf(AxiomVirtualEntityMutation.Relative.class);
+            if (entry.relativeMovementSet.contains(Relative.X)) relative.add(AxiomVirtualEntityMutation.Relative.X);
+            if (entry.relativeMovementSet.contains(Relative.Y)) relative.add(AxiomVirtualEntityMutation.Relative.Y);
+            if (entry.relativeMovementSet.contains(Relative.Z)) relative.add(AxiomVirtualEntityMutation.Relative.Z);
+            if (entry.relativeMovementSet.contains(Relative.Y_ROT)) relative.add(AxiomVirtualEntityMutation.Relative.YAW);
+            if (entry.relativeMovementSet.contains(Relative.X_ROT)) relative.add(AxiomVirtualEntityMutation.Relative.PITCH);
+            position = new AxiomVirtualEntityMutation.Position(
+                    entry.position.x, entry.position.y, entry.position.z,
+                    entry.yaw, entry.pitch, relative);
+        }
+        var merge = com.moulberry.axiom.paperapi.entity.AxiomNbtCompound.EMPTY;
+        if (entry.merge != null) {
+            NbtSanitization.sanitizeEntity(entry.merge);
+            merge = AxiomNbtBridge.fromMinecraft(entry.merge);
+        }
+        virtual.provider().applyMutation(
+                player.getUniqueId(), entry.uuid, new AxiomVirtualEntityMutation(position, merge));
     }
 
     private static CompoundTag merge(CompoundTag left, CompoundTag right) {

@@ -4,10 +4,17 @@ import com.moulberry.axiom.AxiomPaper;
 import com.moulberry.axiom.VersionHelper;
 import com.moulberry.axiom.integration.Integration;
 import com.moulberry.axiom.packet.PacketHandler;
+import com.moulberry.axiom.nbt.AxiomNbtBridge;
+import com.moulberry.axiom.paperapi.entity.AxiomVirtualEntityApi;
 import com.moulberry.axiom.restrictions.AxiomPermission;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.DoubleTag;
+import net.minecraft.nbt.FloatTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.core.UUIDUtil;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
@@ -17,6 +24,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.storage.TagValueOutput;
 import org.bukkit.Location;
+import org.bukkit.Bukkit;
 import org.bukkit.craftbukkit.entity.CraftPlayer;
 
 import java.util.*;
@@ -62,7 +70,57 @@ public class RequestEntityDataPacketListener implements PacketHandler {
             }
 
             Entity entity = serverLevel.getEntity(uuid);
-            if (entity == null || entity instanceof Player) {
+            if (entity == null) {
+                var virtual = AxiomVirtualEntityApi.find(bukkitPlayer.getUniqueId(), uuid);
+                if (virtual != null) {
+                    var snapshot = virtual.snapshot();
+                    Location location = new Location(
+                            Bukkit.getWorld(snapshot.worldUuid()),
+                            snapshot.x(), snapshot.y(), snapshot.z(),
+                            snapshot.yaw(), snapshot.pitch());
+                    if (location.getWorld() != null
+                            && location.getWorld().equals(bukkitPlayer.getWorld())
+                            && Integration.canPlaceBlock(bukkitPlayer, location)) {
+                        final Identifier entityTypeKey;
+                        try {
+                            entityTypeKey = Identifier.parse(snapshot.entityTypeKey());
+                        } catch (IllegalArgumentException ignored) {
+                            continue;
+                        }
+                        var entityType = BuiltInRegistries.ENTITY_TYPE.get(entityTypeKey);
+                        if (entityType.isEmpty()
+                                || !this.plugin.canEntityBeManipulated(entityType.get().value())) {
+                            continue;
+                        }
+                        CompoundTag entityTag = AxiomNbtBridge.toMinecraft(snapshot.entityData());
+                        entityTag.putString("id", entityTypeKey.toString());
+                        entityTag.putIntArray("UUID", UUIDUtil.uuidToIntArray(uuid));
+                        entityTag.put("Pos", new ListTag(List.of(
+                                DoubleTag.valueOf(location.getX()),
+                                DoubleTag.valueOf(location.getY()),
+                                DoubleTag.valueOf(location.getZ())
+                        )));
+                        entityTag.put("Rotation", new ListTag(List.of(
+                                FloatTag.valueOf(location.getYaw()),
+                                FloatTag.valueOf(location.getPitch())
+                        )));
+                        int size = entityTag.sizeInBytes();
+                        if (size >= maxPacketSize) {
+                            sendResponse(player, id, false, Map.of(uuid, entityTag));
+                        } else {
+                            if (remainingBytes - size < 0) {
+                                sendResponse(player, id, false, entityData);
+                                entityData.clear();
+                                remainingBytes = maxPacketSize;
+                            }
+                            entityData.put(uuid, entityTag);
+                            remainingBytes -= size;
+                        }
+                    }
+                }
+                continue;
+            }
+            if (entity instanceof Player) {
                 continue;
             }
 

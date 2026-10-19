@@ -1,5 +1,6 @@
 plugins {
     `java-library`
+    `maven-publish`
     alias(libs.plugins.paperweight.userdev)
     alias(libs.plugins.run.paper) // Adds runServer and runMojangMappedServer tasks for testing
 
@@ -10,6 +11,41 @@ plugins {
 group = "com.moulberry.axiom"
 version = "5.0.4+26.2"
 description = "Serverside component for Axiom on Paper"
+
+val virtualEntityApiSources = files(
+    "src/main/java/com/moulberry/axiom/paperapi/entity/AxiomNbtCompound.java",
+    "src/main/java/com/moulberry/axiom/paperapi/entity/AxiomNbtValue.java",
+    "src/main/java/com/moulberry/axiom/paperapi/entity/AxiomVirtualEntityApi.java",
+    "src/main/java/com/moulberry/axiom/paperapi/entity/AxiomVirtualEntityMutation.java",
+    "src/main/java/com/moulberry/axiom/paperapi/entity/AxiomVirtualEntityProvider.java",
+    "src/main/java/com/moulberry/axiom/paperapi/entity/AxiomVirtualEntityRegistration.java",
+    "src/main/java/com/moulberry/axiom/paperapi/entity/AxiomVirtualEntitySnapshot.java"
+)
+
+val compileVirtualEntityApi by tasks.registering(JavaCompile::class) {
+    source(virtualEntityApiSources)
+    classpath = files()
+    destinationDirectory.set(layout.buildDirectory.dir("classes/java/virtualEntityApi"))
+    options.encoding = Charsets.UTF_8.name()
+    options.release.set(21)
+}
+
+val apiJar by tasks.registering(Jar::class) {
+    dependsOn(compileVirtualEntityApi)
+    archiveClassifier.set("api")
+    from(compileVirtualEntityApi.flatMap { it.destinationDirectory })
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("axiomPaperApi") {
+            groupId = project.group.toString()
+            artifactId = "axiom-paper-api"
+            version = project.version.toString()
+            artifact(apiJar)
+        }
+    }
+}
 
 java {
     toolchain.languageVersion.set(JavaLanguageVersion.of(25))

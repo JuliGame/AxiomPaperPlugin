@@ -1,6 +1,9 @@
 package com.moulberry.axiom.paperapi;
 
 import com.moulberry.axiom.paperapi.entity.ImplAxiomHiddenEntities;
+import com.moulberry.axiom.paperapi.entity.AxiomVirtualEntityProvider;
+import com.moulberry.axiom.paperapi.entity.AxiomVirtualEntityRegistration;
+import com.moulberry.axiom.paperapi.entity.AxiomVirtualEntityApi;
 import org.bukkit.entity.Display;
 import org.bukkit.entity.Marker;
 
@@ -31,5 +34,7 @@ public class AxiomEntityAPI {
         ImplAxiomHiddenEntities.hideCustomDisplayGizmo(object, uuid);
     }
 
-
+    public AxiomVirtualEntityRegistration registerVirtualEntityProvider(AxiomVirtualEntityProvider provider) {
+        return AxiomVirtualEntityApi.register(provider);
+    }
 }
